@@ -22,6 +22,7 @@ from src.features.spatial import classify_zone
 from src.features.zone import (
     label_active_rows,
     build_window_labels,
+    build_vessel_state_table,
     build_task_a_samples,
     build_task_b_samples,
 )
@@ -66,12 +67,25 @@ def main():
     df = label_active_rows(df, sog_min=config["active"]["sog_min"], sog_max=config["active"]["sog_max"])
     vessel_labels = build_window_labels(df, min_records=config["active"]["min_records"])
 
-    # 5. 构建赛题样本
-    print("Building task samples...")
-    task_a = build_task_a_samples(vessel_labels, df)
-    task_b = build_task_b_samples(vessel_labels, df)
+    # 5. 构建个体船状态表（二进制 zone_state）
+    print("Building vessel state table...")
+    vessel_state = build_vessel_state_table(vessel_labels, df)
+    vessel_state.to_csv(processed_dir / "vessel_state.csv", index=False, encoding="utf-8-sig")
+    print(f"  Vessel state rows: {len(vessel_state)}")
+    active_state = vessel_state[vessel_state["zone_state"] > 0]
+    print(f"  Active (zone_state>0): {len(active_state)} rows")
+    for zone, bit in [("核心区", 4), ("近港区", 2), ("外围区", 1)]:
+        n = (active_state["zone_state"] & bit).gt(0).sum()
+        print(f"    {zone}: {n} vessel-hours")
+    multi = active_state["zone_state"].apply(lambda s: bin(s).count("1") > 1)
+    print(f"    多圈层同时活跃: {multi.sum()} vessel-hours")
 
-    # 6. 时间特征
+    # 6. 构建聚合赛题样本
+    print("Building task samples...")
+    task_a = build_task_a_samples(vessel_state)
+    task_b = build_task_b_samples(vessel_state)
+
+    # 7. 时间特征
     print("Adding temporal features...")
     task_a = add_time_features(task_a)
     task_a = add_lag_features(task_a, group_cols=["zone"])
@@ -81,7 +95,7 @@ def main():
     task_b = add_lag_features(task_b, group_cols=["source_zone", "target_zone"])
     task_b = add_rolling_features(task_b, group_cols=["source_zone", "target_zone"])
 
-    # 7. 保存
+    # 8. 保存
     print("Saving processed data...")
     task_a.to_csv(processed_dir / "task_a_train.csv", index=False, encoding="utf-8-sig")
     task_b.to_csv(processed_dir / "task_b_train.csv", index=False, encoding="utf-8-sig")
