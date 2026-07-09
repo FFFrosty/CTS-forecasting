@@ -1,0 +1,10 @@
+pandas>=2.0
+numpy>=1.24
+pyyaml
+scikit-learn
+statsmodels
+lightgbm
+haversine
+pytest
+matplotlib
+openpyxl

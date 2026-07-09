@@ -1,0 +1,31 @@
+# 港口中心坐标
+center:
+  lon: 117.79
+  lat: 38.97
+
+# 圈层半径（km）
+zone_radii:
+  core: 3.0
+  near_port: 10.0
+  outer: 30.0
+
+# 活跃作业状态判定
+active:
+  sog_min: 2.0      # 节
+  sog_max: 10.0     # 节
+  min_records: 3     # 1小时窗口内最少AIS记录数
+
+# 时间窗口
+time_window: 1h
+
+# 训练/验证划分
+data_split:
+  train_start: "2018-01-01"
+  train_end: "2018-01-24"
+  val_start: "2018-01-25"
+  val_end: "2018-01-31"
+
+# 哨兵值
+sentinels:
+  heading_not_available: 511
+  rot_not_available: [-731, -720, 720, 731]
