@@ -9,3 +9,4 @@ data/processed/
 .ipynb_checkpoints/
 dist/
 build/
+.vscode
