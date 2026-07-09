@@ -11,18 +11,34 @@ CTS 2026 算法大赛 — 港口拖轮 AIS 数据预测
 ## 项目结构
 
 ```
-├── data/                   # 数据目录（不入 git）
-│   ├── raw/                # 原始数据
-│   └── processed/          # 清洗后数据
-├── notebooks/              # EDA 分析
+CTS-forecasting/
+├── .gitignore
+├── README.md
+├── requirements.txt
+├── pyproject.toml
+├── configs/
+│   └── settings.yaml              # 中心坐标、圈层半径、活跃阈值
+├── data/
+│   └── .gitkeep                    # raw/ 和 processed/ 不入git
+├── notebooks/
+│   └── 01_eda_overview.py         # 数据分析同学入口
 ├── src/
-│   ├── data/               # 数据加载与清洗
-│   ├── features/           # 特征工程
-│   ├── models/             # 预测模型
-│   └── submission.py       # 提交文件生成
-├── scripts/                # 执行入口
-├── tests/                  # 单元测试
-└── configs/                # 配置文件
+│   ├── data/
+│   │   ├── loader.py              # load_training_data(), load_submission_template()
+│   │   └── cleaner.py             # filter_tug_vessels(), clean_sentinels()
+│   ├── features/
+│   │   ├── spatial.py             # haversine_distance(), classify_zone()
+│   │   ├── zone.py                # 活跃状态标注、赛题A/B样本构建
+│   │   └── temporal.py            # 滞后特征、滚动统计
+│   ├── models/
+│   │   ├── baseline.py            # 历史均值、滚动均值外推
+│   │   └── autoregressive.py      # ARIMA/SARIMA 预测
+│   └── submission.py              # 填模板、输出提交 CSV
+├── scripts/
+│   ├── preprocess.py              # 清洗 → 特征 → 输出 processed/
+│   └── train.py                   # 训练 → 预测 → 生成提交文件
+└── tests/
+    └── test_cleaner.py            # cleaner 单元测试
 ```
 
 ## 环境配置
