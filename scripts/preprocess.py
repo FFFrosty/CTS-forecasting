@@ -63,8 +63,8 @@ def main():
     # 4. 活跃状态标注
     print("Labeling active status...")
     df["time_window"] = df["time"].dt.floor("1h")
-    df = label_active_rows(df, **config["active"])
-    vessel_labels = build_window_labels(df, **config["active"])
+    df = label_active_rows(df, sog_min=config["active"]["sog_min"], sog_max=config["active"]["sog_max"])
+    vessel_labels = build_window_labels(df, min_records=config["active"]["min_records"])
 
     # 5. 构建赛题样本
     print("Building task samples...")
