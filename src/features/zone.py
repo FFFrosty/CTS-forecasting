@@ -64,7 +64,8 @@ def build_vessel_state_table(
     zone_state = 0 表示该船在此时未在任何圈层内有足够活跃记录（但可能仍
     满足总体活跃条件 is_active_vessel，因为活跃判定是全局记录数）。
 
-    primary_zone: 从 zone_state 推导的唯一圈层（用于赛题B迁移判定）。
+    primary_zone: 从 zone_state 推导的唯一圈层（仅作辅助列，B 题已改用
+        全部 AIS 记录的众数区域）。
         优先取内圈：若核心区活跃 → 核心区；
         否则若近港活跃 → 近港区；
         否则若外围活跃 → 外围区；
@@ -141,6 +142,47 @@ def build_vessel_state_table(
     return merged[keep_cols].rename(columns={"is_active_vessel": "is_active"})
 
 
+def build_vessel_repr_table(df: pd.DataFrame) -> pd.DataFrame:
+    """构建每船每小时在 B 题口径下的代表区域。
+
+    赛题补充规则：
+    - 取该小时内 AIS 点数最多的区域；
+    - 若多个区域点数并列，取最后出现时间更晚的区域；
+    - 若最后出现时间仍相同，按 核心区 > 近港区 > 外围区 > 港外 取。
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        含 mmsi, time_window, time, zone 列；zone 可包含港外。
+
+    Returns
+    -------
+    pd.DataFrame
+        含 mmsi, time_window, repr_zone。
+    """
+    # 每船每小时每区域的记录数和最后出现时间
+    zone_stats = (
+        df.groupby(["mmsi", "time_window", "zone"])
+        .agg(n_records=("zone", "count"), latest_time=("time", "max"))
+        .reset_index()
+    )
+
+    # 取记录数最多的区域
+    max_records = zone_stats.groupby(["mmsi", "time_window"])["n_records"].transform("max")
+    top = zone_stats[zone_stats["n_records"] == max_records]
+
+    # 若并列，取最后出现时间更晚的区域
+    max_latest = top.groupby(["mmsi", "time_window"])["latest_time"].transform("max")
+    top = top[top["latest_time"] == max_latest]
+
+    # 若仍并列，按圈层优先级确定
+    priority = {"核心区": 4, "近港区": 3, "外围区": 2, "港外": 1}
+    top["priority"] = top["zone"].map(priority)
+    best = top.loc[top.groupby(["mmsi", "time_window"])["priority"].idxmax()]
+
+    return best[["mmsi", "time_window", "zone"]].rename(columns={"zone": "repr_zone"})
+
+
 def build_task_a_samples(vessel_state: pd.DataFrame) -> pd.DataFrame:
     """从个体船状态表构建赛题A样本：每窗口每圈层的活跃拖轮数量。
 
@@ -166,38 +208,37 @@ def build_task_a_samples(vessel_state: pd.DataFrame) -> pd.DataFrame:
     return pd.concat(rows, ignore_index=True)[["time_window", "zone", "vessel_count"]]
 
 
-def build_task_b_samples(vessel_state: pd.DataFrame) -> pd.DataFrame:
-    """从个体船状态表构建赛题B样本：相邻窗口间的圈层迁移量。
+def build_task_b_samples(repr_table: pd.DataFrame) -> pd.DataFrame:
+    """从代表区域表构建赛题B样本：相邻窗口间的圈层迁移量。
 
-    基于 primary_zone 判定迁移（单圈层归属）。
-    若 zone_state 在相邻小时的主圈层发生变化 → 记为一次迁移。
+    基于 B 题代表区域（repr_zone）判定迁移，时间标签使用源小时 t，
+    与官方模板一致。只保留源、目标均为三圈层的迁移。
 
     Returns
     -------
     pd.DataFrame
         含 time_window, source_zone, target_zone, vessel_count。
     """
-    vs = vessel_state.sort_values(["mmsi", "time_window"])
-    vs["next_primary"] = vs.groupby("mmsi")["primary_zone"].shift(-1)
-    vs["next_window"] = vs.groupby("mmsi")["time_window"].shift(-1)
+    rt = repr_table.sort_values(["mmsi", "time_window"]).copy()
+    rt["next_zone"] = rt.groupby("mmsi")["repr_zone"].shift(-1)
+    rt["next_window"] = rt.groupby("mmsi")["time_window"].shift(-1)
 
-    time_delta = (vs["next_window"] - vs["time_window"]).dt.total_seconds()
-    vs["is_adjacent"] = time_delta == 3600.0
+    time_delta = (rt["next_window"] - rt["time_window"]).dt.total_seconds()
+    rt["is_adjacent"] = time_delta == 3600.0
 
-    migrations = vs[
-        vs["is_adjacent"]
-        & (vs["primary_zone"] != vs["next_primary"])
-        & (vs["primary_zone"] != "港外")
-        & (vs["next_primary"] != "港外")
+    migrations = rt[
+        rt["is_adjacent"]
+        & (rt["repr_zone"] != rt["next_zone"])
+        & (rt["repr_zone"] != "港外")
+        & (rt["next_zone"] != "港外")
     ]
 
     task_b = (
-        migrations.groupby(["next_window", "primary_zone", "next_primary"])["mmsi"]
+        migrations.groupby(["time_window", "repr_zone", "next_zone"])["mmsi"]
         .nunique()
         .reset_index(name="vessel_count")
     )
     return task_b.rename(columns={
-        "next_window": "time_window",
-        "primary_zone": "source_zone",
-        "next_primary": "target_zone",
+        "repr_zone": "source_zone",
+        "next_zone": "target_zone",
     })
