@@ -32,6 +32,22 @@ def main():
         parse_dates=["time_window"],
     )
 
+    # 排除数据源断层期（1/13-1/18），避免主源缺失导致的标签虚低污染均值
+    # TODO 但是这样不好
+    anom_start = pd.Timestamp("2018-01-13")
+    anom_end = pd.Timestamp("2018-01-18 23:00")
+    task_a_train = task_a_train[
+        (task_a_train["time_window"] < anom_start)
+        | (task_a_train["time_window"] > anom_end)
+    ].copy()
+    task_b_train = task_b_train[
+        (task_b_train["time_window"] < anom_start)
+        | (task_b_train["time_window"] > anom_end)
+    ].copy()
+    print(f"  Train samples after excluding data gap (1/13-1/18):")
+    print(f"    Task A: {len(task_a_train)} rows")
+    print(f"    Task B: {len(task_b_train)} rows")
+
     # ---- 赛题A：区域活跃拖轮数量 ----
     print("Task A: forecasting zone vessel counts...")
     # 基线：历史均值

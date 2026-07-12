@@ -50,6 +50,7 @@ def historical_mean_predict(
         predictions.append(matched)
 
     result = pd.concat(predictions, ignore_index=True)
+    result["predicted"] = result["predicted"].round(0).astype(int)
     return result[["time_window"] + group_cols + ["predicted"]]
 
 
@@ -86,4 +87,6 @@ def naive_rolling_mean_predict(
         entry["time_window"] = tw
         predictions.append(entry)
 
-    return pd.concat(predictions, ignore_index=True)
+    result = pd.concat(predictions, ignore_index=True)
+    result["predicted"] = result["predicted"].round(0).astype(int)
+    return result
