@@ -57,7 +57,7 @@ def classify_zone(
     Returns
     -------
     pd.DataFrame
-        附加 distance_km 和 zone 列。
+        附加 distance_km 和 zone 列；港外记录保留，供 B 题代表区域判定使用。
     """
     df = df.copy()
     df[distance_col] = haversine_distance(
@@ -73,17 +73,5 @@ def classify_zone(
     choices = ["核心区", "近港区", "外围区"]
     df[zone_col] = np.select(conditions, choices, default="港外")
 
-    # 丢弃港外记录
-    df = df[df[zone_col] != "港外"].copy()
+    # 保留港外记录：A 题自然不计数；B 题需要用它判断代表区域是否在港外
     return df
-
-
-ZONE_ORDER = ["核心区", "近港区", "外围区"]
-ZONE_MIGRATION_PAIRS = [
-    ("核心区", "近港区"),
-    ("核心区", "外围区"),
-    ("近港区", "核心区"),
-    ("近港区", "外围区"),
-    ("外围区", "核心区"),
-    ("外围区", "近港区"),
-]
