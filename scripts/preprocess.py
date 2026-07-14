@@ -160,7 +160,15 @@ def main():
     multi = active_state["zone_state"].apply(lambda s: bin(s).count("1") > 1)
     print(f"    多圈层同时活跃: {multi.sum()} vessel-hours")
 
-    # 5b. AIS 条目数统计（数据断档检测）
+    # 5b. 保存清洗后的完整轨迹，供下游分析使用
+    print("Saving cleaned trajectory...")
+    keep_cols = ["mmsi", "time", "x", "y", "sog", "cog", "true_heading", "rot",
+                 "zone", "distance_km", "time_window", "is_active_row"]
+    df_traj = df[[c for c in keep_cols if c in df.columns]].copy()
+    df_traj.to_csv(processed_dir / "cleaned_trajectory.csv", index=False, encoding="utf-8-sig")
+    print(f"  Cleaned trajectory: {len(df_traj)} rows")
+
+    # 5c. AIS 条目数统计（数据断档检测）
     print_ais_record_counts(df)
 
     # 保存每小时 AIS 条目数，供下游分析/画图使用
