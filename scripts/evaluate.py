@@ -1,160 +1,122 @@
-"""回测评估：在训练集上做滚动验证，评估不同策略的预测能力。
-
-排除数据源断层期（1/13-1/18）后再评估，避免主源缺失导致的标签虚低污染。
-"""
+"""统一回测入口：在连续日历窗口上按官方加权 SSE 比较策略。"""
 import sys
+from functools import partial
 from pathlib import Path
+
 import pandas as pd
-import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-PROCESSED_DIR = Path(__file__).parent.parent / "data" / "processed"
-
-ZONES = ["核心区", "近港区", "外围区"]
-DIRECTIONS = [
-    ("核心区", "近港区"), ("核心区", "外围区"),
-    ("近港区", "核心区"), ("近港区", "外围区"),
-    ("外围区", "核心区"), ("外围区", "近港区"),
-]
-
-# 数据源断层期，排除
-ANOM_START = pd.Timestamp("2018-01-13")
-ANOM_END = pd.Timestamp("2018-01-18 23:00")
+from src.evaluation import (
+    evaluate_backtest,
+    predict_daily_profile,
+    predict_group_mean,
+    predict_hour_dow_mean,
+    predict_recent_hour_mean,
+)
 
 
-def load_and_filter(name: str, index_cols: list[str]) -> pd.DataFrame:
-    df = pd.read_csv(
-        PROCESSED_DIR / name,
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
+
+DATA_GAP = (pd.Timestamp("2018-01-13"), pd.Timestamp("2018-01-18 23:00"))
+# 原始训练集止于 1/24 23:59，无法计算 1/24 23:00 -> 1/25 00:00 的 B 题迁移。
+B_TERMINAL_CENSORED = (
+    pd.Timestamp("2018-01-24 23:00"),
+    pd.Timestamp("2018-01-24 23:00"),
+)
+
+# A/B 的训练质量策略分开声明，后续可独立比较 B 题是否保留断层期。
+A_EXCLUDED_TRAIN_RANGES = [DATA_GAP]
+B_EXCLUDED_TRAIN_RANGES = [DATA_GAP, B_TERMINAL_CENSORED]
+EXCLUDED_TEST_RANGES = [DATA_GAP, B_TERMINAL_CENSORED]
+
+MIN_TRAIN_DAYS = 7
+HORIZON_DAYS = 3
+
+
+def load_task(filename: str) -> pd.DataFrame:
+    return pd.read_csv(
+        PROCESSED_DIR / filename,
         encoding="utf-8-sig",
         parse_dates=["time_window"],
     )
-    # 排除断层期
-    df = df[
-        (df["time_window"] < ANOM_START) | (df["time_window"] > ANOM_END)
-    ].copy()
-    # 时间特征
-    df["hour"] = df["time_window"].dt.hour
-    df["day_of_week"] = df["time_window"].dt.dayofweek
-    df["is_weekend"] = df["day_of_week"].isin([5, 6]).astype(int)
-    return df
 
 
-def walk_forward_eval(
-    df, group_cols, train_days, test_days, pred_fn, target="vessel_count"
-):
-    """滑动窗口评估：用 train_days 天训练，预测接下来 test_days 天。"""
-    all_hours = np.sort(df["time_window"].unique())
-    total_hours = len(all_hours)
+def main() -> None:
+    task_a = load_task("task_a_train.csv")
+    task_b = load_task("task_b_train.csv")
 
-    errors = []
-    for start_day in range(total_hours // 24 - train_days - test_days + 1):
-        train_end_h = (start_day + train_days) * 24
-        test_start_h = train_end_h
-        test_end_h = test_start_h + test_days * 24
-        if test_end_h > total_hours:
-            break
+    strategies = [
+        ("全历史分组均值", predict_group_mean),
+        (
+            "同星期同时刻均值（取整）",
+            partial(predict_hour_dow_mean, round_predictions=True),
+        ),
+        (
+            "最近10个有效日同小时均值",
+            partial(predict_recent_hour_mean, n_days=10, round_predictions=False),
+        ),
+        (
+            "v2日总量+小时比例（取整）",
+            partial(predict_daily_profile, n_days=10, round_predictions=True),
+        ),
+        (
+            "v2日总量+小时比例（浮点）",
+            partial(predict_daily_profile, n_days=10, round_predictions=False),
+        ),
+    ]
 
-        train_times = all_hours[:train_end_h]
-        test_times = all_hours[test_start_h:test_end_h]
+    print("=" * 88)
+    print("A/B 统一日历回测")
+    print(f"最少训练期: {MIN_TRAIN_DAYS} 天；预测期: {HORIZON_DAYS} 天")
+    print("指标: weighted_sse = SSE_A + 3 * SSE_B")
+    print("断层期不作为验证目标；B题最后一个训练小时视为右删失标签。")
+    print("=" * 88)
 
-        train_df = df[df["time_window"].isin(train_times)]
-        test_df = df[df["time_window"].isin(test_times)]
+    summaries = []
+    fold_starts = None
+    for name, predictor in strategies:
+        result = evaluate_backtest(
+            task_a=task_a,
+            task_b=task_b,
+            predictor=predictor,
+            min_train_days=MIN_TRAIN_DAYS,
+            horizon_days=HORIZON_DAYS,
+            excluded_test_ranges=EXCLUDED_TEST_RANGES,
+            a_excluded_train_ranges=A_EXCLUDED_TRAIN_RANGES,
+            b_excluded_train_ranges=B_EXCLUDED_TRAIN_RANGES,
+        )
+        if result.empty:
+            raise RuntimeError("没有可用回测折，请检查日期范围与排除区间")
+        if fold_starts is None:
+            fold_starts = result["forecast_start"].dt.strftime("%m-%d").tolist()
 
-        if len(train_df) == 0 or len(test_df) == 0:
-            continue
-
-        preds = pred_fn(train_df, len(test_times), group_cols)
-        test_sorted = test_df.sort_values(["time_window"] + group_cols)
-        actuals = test_sorted[target].values
-
-        if len(preds) != len(actuals):
-            test_pivoted = test_df.pivot_table(
-                index="time_window", columns=group_cols, values=target, fill_value=0
-            )
-            actuals = test_pivoted.values.flatten()
-            if len(preds) != len(actuals):
-                min_len = min(len(preds), len(actuals))
-                preds = preds[:min_len]
-                actuals = actuals[:min_len]
-
-        mae = float(np.mean(np.abs(preds - actuals)))
-        rmse = float(np.sqrt(np.mean((preds - actuals) ** 2)))
-        errors.append({
-            "train_days": train_days,
-            "test_start": test_times[0],
-            "mae": mae,
-            "rmse": rmse,
+        summaries.append({
+            "strategy": name,
+            "folds": len(result),
+            "weighted_sse": result["weighted_sse"].mean(),
+            "weighted_mse": result["weighted_mse"].mean(),
+            "a_sse": result["a_sse"].mean(),
+            "b_sse": result["b_sse"].mean(),
+            "a_mae": result["a_mae"].mean(),
+            "b_mae": result["b_mae"].mean(),
         })
 
-    return pd.DataFrame(errors)
-
-
-# ==================== 策略函数 ====================
-
-def pred_historical_mean(train_df, forecast_hours, group_cols):
-    """策略1：同星期同时刻历史均值。"""
-    mean_by_hour_dow = train_df.groupby(
-        group_cols + ["hour", "day_of_week"]
-    )["vessel_count"].mean().reset_index(name="pred")
-
-    last_time = train_df["time_window"].max()
-    test_times = pd.date_range(
-        last_time + pd.Timedelta(hours=1), periods=forecast_hours, freq="h"
-    )
-
-    preds = []
-    for tw in test_times:
-        matched = mean_by_hour_dow[
-            (mean_by_hour_dow["hour"] == tw.hour)
-            & (mean_by_hour_dow["day_of_week"] == tw.dayofweek)
-        ].sort_values(group_cols)
-        preds.append(matched["pred"].values)
-
-    return np.array(preds).flatten()
-
-
-def pred_last_n_mean(train_df, forecast_hours, group_cols, n=24):
-    """策略2：训练集最后 n 小时均值→常数外推。"""
-    df_sorted = train_df.sort_values("time_window")
-    last_n = df_sorted.groupby(group_cols).tail(n)
-    means = last_n.groupby(group_cols)["vessel_count"].mean()
-    ref_idx = ZONES if len(group_cols) == 1 else DIRECTIONS
-    means = means.reindex(ref_idx, fill_value=0)
-    return np.tile(means.values, forecast_hours)
-
-
-def pred_global_mean(train_df, forecast_hours, group_cols):
-    """策略3：全历史均值常数。"""
-    means = train_df.groupby(group_cols)["vessel_count"].mean()
-    ref_idx = ZONES if len(group_cols) == 1 else DIRECTIONS
-    means = means.reindex(ref_idx, fill_value=0)
-    return np.tile(means.values, forecast_hours)
-
-
-# ==================== 评估 ====================
-
-def main():
-    a_full = load_and_filter("task_a_train.csv", ["zone"])
-    b_full = load_and_filter("task_b_train.csv", ["source_zone", "target_zone"])
-
-    for label, df, group_cols in [
-        ("赛题A", a_full, ["zone"]),
-        ("赛题B", b_full, ["source_zone", "target_zone"]),
-    ]:
-        print("=" * 65)
-        print(f"{label}：不同策略滑动窗口回测（已排除数据源断层期）")
-        print("=" * 65)
-        for train_days in [7, 14, 17]:
-            print(f"\n--- 前 {train_days} 天训练，预测后续 ---")
-            for name, fn in [
-                ("同星期同时刻均值", pred_historical_mean),
-                ("最后24h均值外推", pred_last_n_mean),
-                ("全历史均值常数", pred_global_mean),
-            ]:
-                res = walk_forward_eval(df, group_cols, train_days, 3, fn)
-                if len(res) > 0:
-                    print(f"  {name}: MAE={res['mae'].mean():.3f}, RMSE={res['rmse'].mean():.3f}")
+    summary = pd.DataFrame(summaries).sort_values("weighted_sse")
+    print(f"回测起点: {', '.join(fold_starts)}")
+    print("以下 SSE 均为各折平均值，所有策略使用完全相同的目标窗口。\n")
+    print(summary.to_string(
+        index=False,
+        formatters={
+            "weighted_sse": "{:.2f}".format,
+            "weighted_mse": "{:.4f}".format,
+            "a_sse": "{:.2f}".format,
+            "b_sse": "{:.2f}".format,
+            "a_mae": "{:.3f}".format,
+            "b_mae": "{:.3f}".format,
+        },
+    ))
 
 
 if __name__ == "__main__":
