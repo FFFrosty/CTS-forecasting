@@ -30,7 +30,12 @@ from src.features.zone import (
     build_task_a_samples,
     build_task_b_samples,
 )
-from src.features.temporal import add_time_features, add_lag_features, add_rolling_features
+from src.features.temporal import (
+    add_lag_features,
+    add_rolling_features,
+    add_time_features,
+    build_daily_vessel_counts,
+)
 
 
 # 训练期完整时间网格
@@ -128,6 +133,8 @@ def main():
     print(f"  Raw: {len(df)} rows, {df['mmsi'].nunique()} vessels")
     df = filter_tug_vessels(df)
     print(f"  After tug filter: {len(df)} rows, {df['mmsi'].nunique()} vessels")
+    # 验证集提供的是每天出现过的拖轮总数，因此在位置过滤前按同一口径统计训练期数值。
+    daily_vessel_counts = build_daily_vessel_counts(df)
     df = clean_sentinels(df)
     df = remove_outlier_positions(df)
     print(f"  After cleaning: {len(df)} rows")
@@ -205,6 +212,9 @@ def main():
     print("Saving processed data...")
     task_a.to_csv(processed_dir / "task_a_train.csv", index=False, encoding="utf-8-sig")
     task_b.to_csv(processed_dir / "task_b_train.csv", index=False, encoding="utf-8-sig")
+    daily_vessel_counts.to_csv(
+        processed_dir / "daily_vessel_counts.csv", index=False, encoding="utf-8-sig"
+    )
     print(f"  Task A samples: {len(task_a)}")
     print(f"  Task B samples: {len(task_b)}")
     print("Done.")

@@ -14,12 +14,15 @@ from src.evaluation import (
     predict_hour_dow_mean,
     predict_recent_hour_mean,
 )
+from src.models.calibrated import predict_calibrated_hour_mean
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 
-DATA_GAP = (pd.Timestamp("2018-01-13"), pd.Timestamp("2018-01-18 23:00"))
+# A题从 1/12 起已受主数据源下降影响；B题从完全断档的 1/13 起排除。
+A_DATA_GAP = (pd.Timestamp("2018-01-12"), pd.Timestamp("2018-01-18 23:00"))
+B_DATA_GAP = (pd.Timestamp("2018-01-13"), pd.Timestamp("2018-01-18 23:00"))
 # 原始训练集止于 1/24 23:59，无法计算 1/24 23:00 -> 1/25 00:00 的 B 题迁移。
 B_TERMINAL_CENSORED = (
     pd.Timestamp("2018-01-24 23:00"),
@@ -27,9 +30,9 @@ B_TERMINAL_CENSORED = (
 )
 
 # A/B 的训练质量策略分开声明，后续可独立比较 B 题是否保留断层期。
-A_EXCLUDED_TRAIN_RANGES = [DATA_GAP]
-B_EXCLUDED_TRAIN_RANGES = [DATA_GAP, B_TERMINAL_CENSORED]
-EXCLUDED_TEST_RANGES = [DATA_GAP, B_TERMINAL_CENSORED]
+A_EXCLUDED_TRAIN_RANGES = [A_DATA_GAP]
+B_EXCLUDED_TRAIN_RANGES = [B_DATA_GAP, B_TERMINAL_CENSORED]
+EXCLUDED_TEST_RANGES = [A_DATA_GAP, B_TERMINAL_CENSORED]
 
 MIN_TRAIN_DAYS = 7
 HORIZON_DAYS = 3
@@ -43,27 +46,47 @@ def load_task(filename: str) -> pd.DataFrame:
     )
 
 
+def load_daily_counts() -> pd.DataFrame:
+    return pd.read_csv(
+        PROCESSED_DIR / "daily_vessel_counts.csv",
+        encoding="utf-8-sig",
+        parse_dates=["date"],
+    )
+
+
 def main() -> None:
     task_a = load_task("task_a_train.csv")
     task_b = load_task("task_b_train.csv")
+    daily_vessel_counts = load_daily_counts()
 
     strategies = [
-        ("全历史分组均值", predict_group_mean),
+        (
+            "全历史分组均值（整数）",
+            partial(predict_group_mean, round_predictions=True),
+        ),
         (
             "同星期同时刻均值（取整）",
             partial(predict_hour_dow_mean, round_predictions=True),
         ),
         (
-            "最近10个有效日同小时均值",
-            partial(predict_recent_hour_mean, n_days=10, round_predictions=False),
+            "最近10个有效日同小时均值（整数）",
+            partial(predict_recent_hour_mean, n_days=10, round_predictions=True),
+        ),
+        (
+            "最近14个有效日同小时均值（整数）",
+            partial(predict_recent_hour_mean, n_days=14, round_predictions=True),
         ),
         (
             "v2日总量+小时比例（取整）",
             partial(predict_daily_profile, n_days=10, round_predictions=True),
         ),
         (
-            "v2日总量+小时比例（浮点）",
-            partial(predict_daily_profile, n_days=10, round_predictions=False),
+            "每日船舶数校准同小时均值（整数）",
+            partial(
+                predict_calibrated_hour_mean,
+                daily_vessel_counts=daily_vessel_counts,
+                n_days=10,
+            ),
         ),
     ]
 
@@ -71,7 +94,8 @@ def main() -> None:
     print("A/B 统一日历回测")
     print(f"最少训练期: {MIN_TRAIN_DAYS} 天；预测期: {HORIZON_DAYS} 天")
     print("指标: weighted_sse = SSE_A + 3 * SSE_B")
-    print("断层期不作为验证目标；B题最后一个训练小时视为右删失标签。")
+    print("所有策略输出非负整数；断层期不作为验证目标。")
+    print("A题从1/12起排除低覆盖数据；B题最后一个训练小时视为右删失标签。")
     print("=" * 88)
 
     summaries = []

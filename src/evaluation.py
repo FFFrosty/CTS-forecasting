@@ -90,11 +90,14 @@ def predict_group_mean(
     train_df: pd.DataFrame,
     forecast_times: pd.DatetimeIndex,
     group_cols: list[str],
+    round_predictions: bool = False,
 ) -> pd.DataFrame:
     """用每个圈层或迁移方向的全历史均值预测。"""
     grid = _prediction_grid(train_df, forecast_times, group_cols)
     grid["predicted"] = np.nan
     result = _add_group_fallback(grid, train_df, group_cols)
+    if round_predictions:
+        result["predicted"] = np.rint(result["predicted"])
     return result[["time_window"] + group_cols + ["predicted"]]
 
 

@@ -3,6 +3,21 @@ import pandas as pd
 import numpy as np
 
 
+def build_daily_vessel_counts(
+    df: pd.DataFrame,
+    time_col: str = "time",
+    vessel_col: str = "mmsi",
+) -> pd.DataFrame:
+    """统计每天出现过的唯一拖轮数，作为验证期已知外生变量。"""
+    daily = df[[time_col, vessel_col]].copy()
+    daily["date"] = daily[time_col].dt.normalize()
+    return (
+        daily.groupby("date", as_index=False)[vessel_col]
+        .nunique()
+        .rename(columns={vessel_col: "vessel_count"})
+    )
+
+
 def add_time_features(df: pd.DataFrame, time_col: str = "time_window") -> pd.DataFrame:
     """提取基础时间特征。
 
