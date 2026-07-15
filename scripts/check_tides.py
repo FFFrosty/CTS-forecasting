@@ -14,12 +14,15 @@
 
 TODO: 其实0.42也不高，感觉小时的数不太考虑，以后可以分钟级试试。
 """
-import pandas as pd
+from pathlib import Path
+
 import numpy as np
+import pandas as pd
 
 # 加载 Task A 聚合数据，构建全局24天×24h的活跃拖轮总数序列
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 a = pd.read_csv(
-    r"D:\Documents\PythonProject\CTS2026\data\processed\task_a_train.csv",
+    PROJECT_ROOT / "data" / "processed" / "task_a_train.csv",
     parse_dates=["time_window"],
 )
 

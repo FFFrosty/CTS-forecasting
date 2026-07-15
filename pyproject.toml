@@ -1,12 +1,28 @@
 [build-system]
 requires = ["setuptools>=64"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "cts-forecasting"
 version = "0.1.0"
 description = "CTS 2026 港口拖轮AIS数据预测竞赛"
+readme = "README.md"
 requires-python = ">=3.10"
+dependencies = [
+    "haversine",
+    "lightgbm",
+    "matplotlib",
+    "numpy>=1.24",
+    "openpyxl",
+    "pandas>=2.0",
+    "PyYAML",
+    "scikit-learn",
+    "statsmodels",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
+include = ["src", "src.*"]
