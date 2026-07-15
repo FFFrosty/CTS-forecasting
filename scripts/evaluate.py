@@ -15,6 +15,7 @@ from src.evaluation import (
     predict_recent_hour_mean,
 )
 from src.models.calibrated import predict_calibrated_hour_mean
+from src.models.ensemble import predict_integer_blend
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -59,7 +60,33 @@ def main() -> None:
     task_b = load_task("task_b_train.csv")
     daily_vessel_counts = load_daily_counts()
 
+    global_mean_float = partial(predict_group_mean, round_predictions=False)
+    recent_14_float = partial(
+        predict_recent_hour_mean, n_days=14, round_predictions=False
+    )
+    recent_10_float = partial(
+        predict_recent_hour_mean, n_days=10, round_predictions=False
+    )
+
+    def task_specific_ensemble(train_df, forecast_times, group_cols):
+        if group_cols == ["zone"]:
+            return predict_integer_blend(
+                train_df,
+                forecast_times,
+                group_cols,
+                predictors=[global_mean_float, recent_14_float],
+                weights=[0.3, 0.7],
+            )
+        return predict_integer_blend(
+            train_df,
+            forecast_times,
+            group_cols,
+            predictors=[global_mean_float, recent_10_float],
+            weights=[0.7, 0.3],
+        )
+
     strategies = [
+        ("v4任务独立整数融合", task_specific_ensemble),
         (
             "全历史分组均值（整数）",
             partial(predict_group_mean, round_predictions=True),

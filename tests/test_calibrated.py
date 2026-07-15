@@ -4,7 +4,7 @@ import pytest
 
 from src.features.temporal import build_daily_vessel_counts
 from src.models.calibrated import predict_calibrated_hour_mean
-from scripts.train_v3 import validate_prediction_grid
+from src.submission import validate_prediction_grid
 
 
 def test_build_daily_vessel_counts_uses_unique_vessels_per_date():

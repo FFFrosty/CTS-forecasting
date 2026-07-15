@@ -3,6 +3,31 @@ import pandas as pd
 from pathlib import Path
 
 
+def validate_prediction_grid(
+    predictions: pd.DataFrame,
+    forecast_times: pd.DatetimeIndex,
+    group_cols: list[str],
+    expected_groups: list[tuple],
+) -> None:
+    """提交前校验时间、分组、键完整性以及非负整数约束。"""
+    keys = ["time_window"] + group_cols
+    observed_groups = set(
+        predictions[group_cols].drop_duplicates().itertuples(index=False, name=None)
+    )
+    if observed_groups != set(expected_groups):
+        raise ValueError("prediction groups do not match the official template")
+    if predictions.duplicated(keys).any():
+        raise ValueError("prediction keys must be unique")
+    if len(predictions) != len(forecast_times) * len(expected_groups):
+        raise ValueError("prediction grid is incomplete")
+    if set(predictions["time_window"]) != set(forecast_times):
+        raise ValueError("prediction timestamps do not match the validation period")
+    if not pd.api.types.is_integer_dtype(predictions["predicted"]):
+        raise ValueError("submission predictions must be integers")
+    if (predictions["predicted"] < 0).any():
+        raise ValueError("submission predictions must be non-negative")
+
+
 def fill_template(
     template_path: str | Path,
     predictions: pd.DataFrame,
