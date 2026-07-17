@@ -119,3 +119,27 @@ def test_daily_count_features_are_attached_to_every_hour_of_target_day():
     assert final_day["daily_vessel_count_delta_1"].eq(3).all()
     assert "daily_vessel_count" in daily_batch_numeric_feature_columns(True)
     assert "daily_vessel_count" not in daily_batch_numeric_feature_columns(False)
+
+
+def test_daily_batch_can_separate_history_values_from_training_labels():
+    samples = pd.DataFrame({
+        "time_window": pd.date_range("2018-01-01", periods=3 * 24, freq="h"),
+        "zone": ["核心区"] * (3 * 24),
+        "vessel_count": np.arange(3 * 24, dtype=float),
+    })
+    samples["history_count"] = samples["vessel_count"]
+    second_day = samples["time_window"].dt.normalize().eq(
+        pd.Timestamp("2018-01-02")
+    )
+    samples.loc[second_day, "history_count"] = 100.0
+    samples.loc[second_day, "vessel_count"] = np.nan
+
+    features = build_daily_batch_features(
+        samples,
+        ["zone"],
+        history_col="history_count",
+    )
+    third_day = features["date"].eq(pd.Timestamp("2018-01-03"))
+
+    assert features.loc[third_day, "lag_24"].eq(100.0).all()
+    assert features.loc[third_day, "previous_day_total"].eq(2400.0).all()

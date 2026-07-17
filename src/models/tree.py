@@ -31,6 +31,7 @@ class FittedTreeModel:
     group_cols: tuple[str, ...]
     numeric_features: tuple[str, ...]
     model_name: str
+    history_col: str
 
     @property
     def input_columns(self) -> list[str]:
@@ -87,6 +88,7 @@ def fit_tree_model(
         model_name,
         random_state,
         target_col,
+        history_col=target_col,
     )
 
 
@@ -97,6 +99,8 @@ def _fit_feature_frame(
     model_name: str,
     random_state: int,
     target_col: str,
+    history_col: str,
+    sample_weights: pd.Series | None = None,
 ) -> FittedTreeModel:
     valid = feature_frame[target_col].notna()
     if valid.sum() < 10:
@@ -131,15 +135,29 @@ def _fit_feature_frame(
         ("regressor", _build_regressor(model_name, random_state)),
     ])
     input_columns = [*group_cols, *numeric_features]
+    fit_kwargs = {}
+    if sample_weights is not None:
+        weights = sample_weights.loc[valid].astype(float)
+        if (
+            not np.isfinite(weights).all()
+            or weights.lt(0).any()
+            or weights.sum() <= 0
+        ):
+            raise ValueError(
+                "sample weights must be finite, non-negative and non-zero"
+            )
+        fit_kwargs["regressor__sample_weight"] = weights
     pipeline.fit(
         feature_frame.loc[valid, input_columns],
         feature_frame.loc[valid, target_col].astype(float),
+        **fit_kwargs,
     )
     return FittedTreeModel(
         pipeline=pipeline,
         group_cols=tuple(group_cols),
         numeric_features=tuple(numeric_features),
         model_name=model_name,
+        history_col=history_col,
     )
 
 
@@ -150,14 +168,37 @@ def fit_daily_batch_tree_model(
     random_state: int = 2026,
     daily_vessel_counts: pd.DataFrame | None = None,
     target_col: str = "vessel_count",
+    history_col: str | None = None,
+    sample_weight_col: str | None = None,
 ) -> FittedTreeModel:
     """拟合仅使用目标日开始前历史的每日批量树模型。"""
+    history_col = history_col or target_col
     feature_frame = build_daily_batch_features(
         train_samples,
         group_cols,
         target_col=target_col,
+        history_col=history_col,
         daily_vessel_counts=daily_vessel_counts,
     )
+    sample_weights = None
+    if sample_weight_col is not None:
+        keys = ["time_window", *group_cols]
+        required = {*keys, sample_weight_col}
+        missing = required.difference(train_samples.columns)
+        if missing:
+            raise ValueError(
+                f"train_samples are missing weight columns: {sorted(missing)}"
+            )
+        weights = train_samples[[*keys, sample_weight_col]].copy()
+        if weights.duplicated(keys).any():
+            raise ValueError("sample weights must contain unique time/group keys")
+        feature_frame = feature_frame.merge(
+            weights,
+            on=keys,
+            how="left",
+            validate="one_to_one",
+        )
+        sample_weights = feature_frame[sample_weight_col]
     numeric_features = daily_batch_numeric_feature_columns(
         include_daily_count=daily_vessel_counts is not None,
     )
@@ -168,6 +209,8 @@ def fit_daily_batch_tree_model(
         model_name,
         random_state,
         target_col,
+        history_col=history_col,
+        sample_weights=sample_weights,
     )
 
 
@@ -185,7 +228,13 @@ def recursive_tree_forecast(
         raise ValueError("forecast_times must be contiguous hourly timestamps")
 
     group_cols = list(fitted.group_cols)
-    history = complete_time_grid(train_samples, group_cols, target_col)
+    history_col = fitted.history_col
+    history = complete_time_grid(
+        train_samples,
+        group_cols,
+        target_col,
+        extra_cols=[history_col] if history_col != target_col else [],
+    )
     if times[0] <= history["time_window"].max():
         raise ValueError("forecast_times must start after the training history")
     origin = history["time_window"].min()
@@ -197,7 +246,7 @@ def recursive_tree_forecast(
         mask = pd.Series(True, index=history.index)
         for column, value in zip(group_cols, group_values):
             mask &= history[column].eq(value)
-        series = history.loc[mask].set_index("time_window")[target_col]
+        series = history.loc[mask].set_index("time_window")[history_col]
         histories[group_values] = series.reindex(full_index).astype(float)
 
     prediction_rows = []
@@ -266,7 +315,13 @@ def daily_batch_tree_forecast(
             raise ValueError("daily_vessel_counts are missing forecast dates")
 
     group_cols = list(fitted.group_cols)
-    history = complete_time_grid(train_samples, group_cols, target_col)
+    history_col = fitted.history_col
+    history = complete_time_grid(
+        train_samples,
+        group_cols,
+        target_col,
+        extra_cols=[history_col] if history_col != target_col else [],
+    )
     if times[0] <= history["time_window"].max():
         raise ValueError("forecast_times must start after the training history")
     groups = history[group_cols].drop_duplicates().sort_values(group_cols)
@@ -279,11 +334,14 @@ def daily_batch_tree_forecast(
             how="cross",
         )
         future[target_col] = np.nan
+        if history_col != target_col:
+            future[history_col] = np.nan
         extended = pd.concat([history, future], ignore_index=True)
         feature_frame = build_daily_batch_features(
             extended,
             group_cols,
             target_col=target_col,
+            history_col=history_col,
             daily_vessel_counts=daily_vessel_counts if uses_daily_count else None,
         )
         current = (
@@ -304,7 +362,9 @@ def daily_batch_tree_forecast(
         predictions["predicted"] = raw_predictions.astype(float)
         prediction_frames.append(predictions)
 
-        updates = predictions.rename(columns={"predicted": target_col})
+        updates = predictions.rename(columns={"predicted": history_col})
+        if history_col != target_col:
+            updates[target_col] = np.nan
         history = pd.concat([history, updates], ignore_index=True)
 
     result = pd.concat(prediction_frames, ignore_index=True)

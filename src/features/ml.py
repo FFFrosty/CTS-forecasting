@@ -16,14 +16,25 @@ def complete_time_grid(
     samples: pd.DataFrame,
     group_cols: list[str],
     target_col: str = "vessel_count",
+    extra_cols: Sequence[str] = (),
 ) -> pd.DataFrame:
     """补齐每个分组的连续小时网格，缺失标签保留为 NaN。"""
-    required = {"time_window", target_col, *group_cols}
+    extra_cols = tuple(dict.fromkeys(
+        column
+        for column in extra_cols
+        if column not in {"time_window", target_col, *group_cols}
+    ))
+    required = {"time_window", target_col, *group_cols, *extra_cols}
     missing = required.difference(samples.columns)
     if missing:
         raise ValueError(f"samples are missing required columns: {sorted(missing)}")
 
-    work = samples[["time_window", *group_cols, target_col]].copy()
+    work = samples[[
+        "time_window",
+        *group_cols,
+        target_col,
+        *extra_cols,
+    ]].copy()
     work["time_window"] = pd.to_datetime(work["time_window"])
     keys = ["time_window", *group_cols]
     if work.duplicated(keys).any():
@@ -271,6 +282,7 @@ def build_daily_batch_features(
     samples: pd.DataFrame,
     group_cols: list[str],
     target_col: str = "vessel_count",
+    history_col: str | None = None,
     daily_vessel_counts: pd.DataFrame | None = None,
     lags: Sequence[int] = DAILY_BATCH_LAGS,
     same_hour_windows: Sequence[int] = DEFAULT_SAME_HOUR_WINDOWS,
@@ -281,17 +293,24 @@ def build_daily_batch_features(
     所有目标历史特征均来自目标日前一天或更早。同一天任一小时的
     ``vessel_count`` 都不会进入当天其他小时的特征。
     """
-    frame = complete_time_grid(samples, group_cols, target_col)
+    history_col = history_col or target_col
+    history_columns = [history_col] if history_col != target_col else []
+    frame = complete_time_grid(
+        samples,
+        group_cols,
+        target_col,
+        extra_cols=history_columns,
+    )
     origin = frame["time_window"].min()
     frame = _add_calendar_features(frame, origin)
     frame["date"] = frame["time_window"].dt.normalize()
 
-    grouped = frame.groupby(group_cols, sort=False)[target_col]
+    grouped = frame.groupby(group_cols, sort=False)[history_col]
     for lag in lags:
         frame[f"lag_{lag}"] = grouped.shift(lag)
 
     same_hour_groups = [*group_cols, "hour"]
-    same_hour = frame.groupby(same_hour_groups, sort=False)[target_col]
+    same_hour = frame.groupby(same_hour_groups, sort=False)[history_col]
     for window in same_hour_windows:
         frame[f"same_hour_{window}d_mean"] = same_hour.transform(
             lambda values: values.shift(1).rolling(window, min_periods=1).mean()
@@ -304,7 +323,7 @@ def build_daily_batch_features(
         )
 
     daily = (
-        frame.groupby([*group_cols, "date"], as_index=False)[target_col]
+        frame.groupby([*group_cols, "date"], as_index=False)[history_col]
         .agg(daily_total="sum", labeled_hours="count")
     )
     daily.loc[daily["labeled_hours"] < 24, "daily_total"] = np.nan

@@ -109,3 +109,34 @@ def test_daily_count_model_requires_counts_for_every_forecast_date():
             pd.date_range("2018-01-05", periods=24, freq="h"),
             daily_vessel_counts=training_counts,
         )
+
+
+def test_daily_batch_model_supports_reconstructed_history_and_label_weights():
+    train = make_training_samples()
+    train["history_count"] = train["vessel_count"].astype(float)
+    train["sample_weight"] = 1.0
+    pseudo_day = train["time_window"].dt.normalize().eq(
+        pd.Timestamp("2018-01-02")
+    )
+    train.loc[pseudo_day, "history_count"] += 2.0
+    train.loc[pseudo_day, "vessel_count"] = train.loc[
+        pseudo_day,
+        "history_count",
+    ]
+    train.loc[pseudo_day, "sample_weight"] = 0.25
+
+    fitted = fit_daily_batch_tree_model(
+        train,
+        ["zone"],
+        history_col="history_count",
+        sample_weight_col="sample_weight",
+    )
+    result = daily_batch_tree_forecast(
+        fitted,
+        train,
+        pd.date_range("2018-01-05", periods=24, freq="h"),
+    )
+
+    assert fitted.history_col == "history_count"
+    assert len(result) == 48
+    assert pd.api.types.is_integer_dtype(result["predicted"])
