@@ -10,7 +10,8 @@
 7. 构建赛题A/B样本
 8. 补齐完整时间网格（补零）
 9. 时间特征工程
-10. 输出 processed/ 目录
+10. 宽表（tslib 格式）
+11. 输出 processed/ 目录
 """
 import sys
 from pathlib import Path
@@ -208,15 +209,27 @@ def main():
     task_b = add_lag_features(task_b, group_cols=["source_zone", "target_zone"])
     task_b = add_rolling_features(task_b, group_cols=["source_zone", "target_zone"])
 
-    # 10. 保存
+    # 10. 宽表（tslib 输入：每行时间，每列目标）
+    task_a_wide = task_a.pivot(index="time_window", columns="zone", values="vessel_count").reset_index()
+    task_a_wide.columns.name = None
+    task_b = task_b.copy()
+    task_b["direction"] = task_b["source_zone"] + "→" + task_b["target_zone"]
+    task_b_wide = task_b.pivot(
+        index="time_window", columns="direction", values="vessel_count"
+    ).reset_index()
+    task_b_wide.columns.name = None
+    task_a_wide.to_csv(processed_dir / "task_a_train_wide.csv", index=False, encoding="utf-8-sig")
+    task_b_wide.to_csv(processed_dir / "task_b_train_wide.csv", index=False, encoding="utf-8-sig")
+
+    # 11. 保存
     print("Saving processed data...")
     task_a.to_csv(processed_dir / "task_a_train.csv", index=False, encoding="utf-8-sig")
     task_b.to_csv(processed_dir / "task_b_train.csv", index=False, encoding="utf-8-sig")
     daily_vessel_counts.to_csv(
         processed_dir / "daily_vessel_counts.csv", index=False, encoding="utf-8-sig"
     )
-    print(f"  Task A samples: {len(task_a)}")
-    print(f"  Task B samples: {len(task_b)}")
+    print(f"  Task A samples: {len(task_a)}  (wide: {len(task_a_wide)}×{len(task_a_wide.columns)-1})")
+    print(f"  Task B samples: {len(task_b)}  (wide: {len(task_b_wide)}×{len(task_b_wide.columns)-1})")
     print("Done.")
 
 
