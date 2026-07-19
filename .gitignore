@@ -10,3 +10,5 @@ data/processed/
 dist/
 build/
 .vscode
+data/models/CACHEDIR.TAG
+data/models/models--amazon--chronos-bolt-base/
